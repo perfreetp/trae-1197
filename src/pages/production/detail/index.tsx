@@ -23,6 +23,7 @@ import {
   Check,
   X,
   AlertTriangle,
+  AlertCircle,
   Plus,
   Upload,
   FileText,
@@ -46,6 +47,16 @@ const TABS: { key: TabKey; label: string; icon: React.ComponentType<{ className?
   { key: 'materials', label: '原料信息', icon: FlaskConical },
   { key: 'process', label: '工序进度', icon: Settings },
   { key: 'qc', label: '质检报告', icon: CheckSquare },
+];
+
+const QC_ITEMS_META: { id: string; name: string; standard: string; passResult: string }[] = [
+  { id: '1', name: '外观性状', standard: '本品为白色或类白色片', passResult: '本品为白色片，色泽均匀，符合规定' },
+  { id: '2', name: '重量差异', standard: '±7.5%以内', passResult: '平均片重0.2512g，RSD=1.23%，在±7.5%范围内' },
+  { id: '3', name: '崩解时限', standard: '≤30分钟', passResult: '12.5分钟全部崩解，远低于30分钟上限' },
+  { id: '4', name: '溶出度', standard: '≥80%（30min）', passResult: '平均溶出度92.3%，达到标准要求' },
+  { id: '5', name: '含量测定', standard: '标示量的95.0%~105.0%', passResult: '平均含量99.62%，落在95.0%~105.0%区间内' },
+  { id: '6', name: '微生物限度', standard: '细菌总数≤1000cfu/g', passResult: '细菌总数<10cfu/g，霉菌、酵母菌均未检出' },
+  { id: '7', name: '有关物质', standard: '单个杂质≤0.5%，总杂质≤1.5%', passResult: '单个最大杂质0.12%，总杂质0.28%，符合规定' },
 ];
 
 const QC_ITEMS: { id: string; name: string; standard: string; result: string; resultType: 'pass' | 'pending' | 'fail'; inspector: string; inspectTime: string }[] = [
@@ -87,6 +98,41 @@ export default function ProductionDetail() {
       : 'pending';
   const [qcConclusion, setQcConclusion] = useState<'qualified' | 'unqualified' | 'pending'>(qcConclusionFromReport);
   const [qcRemarks, setQcRemarks] = useState(batch?.qcReport?.remark ?? '');
+  const [abnormalItemIds, setAbnormalItemIds] = useState<Set<string>>(new Set());
+  const [abnormalFields, setAbnormalFields] = useState<Record<string, { result: string; handleRemark: string }>>({});
+
+  const toggleAbnormalItem = (id: string) => {
+    setAbnormalItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+        if (!abnormalFields[id]) {
+          setAbnormalFields(pf => ({ ...pf, [id]: { result: '', handleRemark: '' } }));
+        }
+      }
+      return next;
+    });
+  };
+
+  const updateAbnormalField = (id: string, key: 'result' | 'handleRemark', value: string) => {
+    setAbnormalFields(prev => ({
+      ...prev,
+      [id]: {
+        result: prev[id]?.result ?? '',
+        handleRemark: prev[id]?.handleRemark ?? '',
+        [key]: value,
+      },
+    }));
+  };
+
+  const resetQcState = () => {
+    setQcConclusion(qcConclusionFromReport);
+    setQcRemarks(batch?.qcReport?.remark ?? '');
+    setAbnormalItemIds(new Set());
+    setAbnormalFields({});
+  };
 
   useEffect(() => {
     setPageTitle('批次详情');
@@ -214,62 +260,72 @@ export default function ProductionDetail() {
       toastError('请选择质检结论');
       return;
     }
-    if (qcConclusion === 'unqualified' && qcRemarks.trim().length < 5) {
-      toastError('不合格结论请填写不少于5字的处理说明');
-      return;
+    if (qcConclusion === 'unqualified') {
+      if (abnormalItemIds.size === 0) {
+        toastError('请至少勾选 1 个不合格检验项');
+        return;
+      }
+      let allFilled = true;
+      abnormalItemIds.forEach(id => {
+        const f = abnormalFields[id];
+        if (!f?.result?.trim() || !f?.handleRemark?.trim()) allFilled = false;
+      });
+      if (!allFilled) {
+        toastError('请完整填写勾选项的异常结果与处理说明');
+        return;
+      }
     }
     const overallResult = qcConclusion === 'qualified' ? '合格' : '不合格';
     const inspectorName = '当前质检员';
     const reportDate = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
-    if (qcConclusion === 'qualified') {
-      const items = [
-        { itemName: '外观性状', standard: '本品为白色或类白色片', testResult: '本品为白色片，色泽均匀，符合规定', isPass: true },
-        { itemName: '重量差异', standard: '±7.5%以内', testResult: '平均片重0.2512g，RSD=1.23%，在±7.5%范围内', isPass: true },
-        { itemName: '崩解时限', standard: '≤30分钟', testResult: '12.5分钟全部崩解，远低于30分钟上限', isPass: true },
-        { itemName: '溶出度', standard: '≥80%（30min）', testResult: '平均溶出度92.3%，达到标准要求', isPass: true },
-        { itemName: '含量测定', standard: '标示量的95.0%~105.0%', testResult: '平均含量99.62%，落在95.0%~105.0%区间内', isPass: true },
-        { itemName: '微生物限度', standard: '细菌总数≤1000cfu/g', testResult: '细菌总数<10cfu/g，霉菌、酵母菌均未检出', isPass: true },
-        { itemName: '有关物质', standard: '单个杂质≤0.5%，总杂质≤1.5%', testResult: '单个最大杂质0.12%，总杂质0.28%，符合规定', isPass: true },
-      ];
-      const result = await submitQC(id, {
-        reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
-        reportDate,
-        inspector: inspectorName,
-        overallResult,
-        items,
-        remark: qcRemarks.trim() || '全项检验合格，准予放行。',
-      } as any);
-      if (result) {
-        toastSuccess(`批次 ${batch?.batchNo} 质检结论：合格，已提交`);
-        setQcModalOpen(false);
-      } else {
-        toastError('质检结论提交失败，请重试');
+    const items: { itemName: string; standard: string; testResult: string; isPass: boolean }[] = QC_ITEMS_META.map(meta => {
+      const isAbnormal = abnormalItemIds.has(meta.id);
+      if (qcConclusion === 'qualified' || !isAbnormal) {
+        return {
+          itemName: meta.name,
+          standard: meta.standard,
+          testResult: meta.passResult,
+          isPass: true,
+        };
       }
+      const f = abnormalFields[meta.id] ?? { result: '', handleRemark: '' };
+      return {
+        itemName: meta.name,
+        standard: meta.standard,
+        testResult: f.result.trim() || '不符合标准规定',
+        isPass: false,
+      };
+    });
+
+    let finalRemark = qcRemarks.trim();
+    if (qcConclusion === 'unqualified') {
+      const prefixParts: string[] = [];
+      abnormalItemIds.forEach(id => {
+        const meta = QC_ITEMS_META.find(m => m.id === id);
+        const f = abnormalFields[id];
+        if (meta && f) {
+          prefixParts.push(`【${meta.name}】异常结果：${f.result.trim()}；处理：${f.handleRemark.trim()}`);
+        }
+      });
+      const prefix = prefixParts.join(' | ');
+      finalRemark = finalRemark ? `${prefix}。备注：${finalRemark}` : `${prefix}。`;
+    }
+
+    const result = await submitQC(id, {
+      reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
+      reportDate,
+      inspector: inspectorName,
+      overallResult,
+      items,
+      remark: finalRemark || (qcConclusion === 'qualified' ? '全项检验合格，准予放行。' : ''),
+    } as any);
+    if (result) {
+      toastSuccess(`批次 ${batch?.batchNo} 质检结论：${overallResult}，已提交`);
+      setQcModalOpen(false);
+      resetQcState();
     } else {
-      const items = [
-        { itemName: '外观性状', standard: '本品为白色或类白色片', testResult: '本品为白色片，色泽均匀，符合规定', isPass: true },
-        { itemName: '重量差异', standard: '±7.5%以内', testResult: '平均片重0.2508g，RSD=1.45%，在±7.5%范围内', isPass: true },
-        { itemName: '崩解时限', standard: '≤30分钟', testResult: '14.2分钟全部崩解，符合要求', isPass: true },
-        { itemName: '溶出度', standard: '≥80%（30min）', testResult: '平均溶出度91.7%，达到标准要求', isPass: true },
-        { itemName: '含量测定', standard: '标示量的95.0%~105.0%', testResult: '平均含量98.45%，落在规定区间内', isPass: true },
-        { itemName: '微生物限度', standard: '细菌总数≤1000cfu/g', testResult: '细菌总数1260cfu/g，超标26%，霉菌检出15cfu/g', isPass: false },
-        { itemName: '有关物质', standard: '单个杂质≤0.5%，总杂质≤1.5%', testResult: '单个最大杂质0.14%，总杂质0.30%，符合规定', isPass: true },
-      ];
-      const result = await submitQC(id, {
-        reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
-        reportDate,
-        inspector: inspectorName,
-        overallResult,
-        items,
-        remark: qcRemarks.trim(),
-      } as any);
-      if (result) {
-        toastSuccess(`批次 ${batch?.batchNo} 质检结论：不合格，已记录`);
-        setQcModalOpen(false);
-      } else {
-        toastError('质检结论提交失败，请重试');
-      }
+      toastError('质检结论提交失败，请重试');
     }
   };
 
@@ -523,12 +579,19 @@ export default function ProductionDetail() {
         <QCModal
           batchNo={batch.batchNo}
           open
-          onClose={() => setQcModalOpen(false)}
+          onClose={() => {
+            setQcModalOpen(false);
+            resetQcState();
+          }}
           conclusion={qcConclusion}
           setConclusion={setQcConclusion}
           remarks={qcRemarks}
           setRemarks={setQcRemarks}
           onSubmit={handleSubmitQC}
+          abnormalItemIds={abnormalItemIds}
+          toggleAbnormalItem={toggleAbnormalItem}
+          abnormalFields={abnormalFields}
+          updateAbnormalField={updateAbnormalField}
         />
       )}
     </div>
@@ -1105,6 +1168,10 @@ function QCModal({
   setRemarks,
   onSubmit,
   batchNo,
+  abnormalItemIds,
+  toggleAbnormalItem,
+  abnormalFields,
+  updateAbnormalField,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1114,6 +1181,10 @@ function QCModal({
   setRemarks: (s: string) => void;
   onSubmit: () => void;
   batchNo: string;
+  abnormalItemIds: Set<string>;
+  toggleAbnormalItem: (id: string) => void;
+  abnormalFields: Record<string, { result: string; handleRemark: string }>;
+  updateAbnormalField: (id: string, key: 'result' | 'handleRemark', value: string) => void;
 }) {
   if (!open) return null;
   const options: { key: 'qualified' | 'unqualified'; label: string; desc: string; icon: React.ReactNode; activeClass: string; borderClass: string }[] = [
@@ -1138,8 +1209,8 @@ function QCModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-fadeIn" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded-3xl bg-white shadow-2xl animate-fadeInUp overflow-hidden">
-        <div className="relative p-6 bg-gradient-to-br from-primary via-indigo-500 to-purple-500 text-white">
+      <div className="relative w-full max-w-2xl max-h-[90vh] rounded-3xl bg-white shadow-2xl animate-fadeInUp overflow-hidden flex flex-col">
+        <div className="relative p-6 bg-gradient-to-br from-primary via-indigo-500 to-purple-500 text-white shrink-0">
           <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full -translate-y-1/2 translate-x-1/3 blur-3xl" />
           <div className="relative flex items-start justify-between">
             <div>
@@ -1148,7 +1219,11 @@ function QCModal({
                 <Send className="w-5 h-5" />
                 提交质检总结论
               </h3>
-              <p className="text-xs text-white/80 mt-1">请选择该批次的最终质检结论</p>
+              <p className="text-xs text-white/80 mt-1">
+                {conclusion === 'unqualified'
+                  ? '请勾选异常检验项并填写异常结果与处理说明'
+                  : '请选择该批次的最终质检结论'}
+              </p>
             </div>
             <button
               onClick={onClose}
@@ -1159,7 +1234,7 @@ function QCModal({
           </div>
         </div>
 
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-5 overflow-y-auto">
           <div className="grid grid-cols-2 gap-3">
             {options.map(opt => {
               const active = conclusion === opt.key;
@@ -1186,22 +1261,117 @@ function QCModal({
             })}
           </div>
 
+          {conclusion === 'unqualified' && (
+            <div className="space-y-3 rounded-2xl border-2 border-red-100 bg-red-50/40 p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-red-700">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span className="text-sm font-semibold">不合格检验项明细</span>
+                </div>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                  已勾选 {abnormalItemIds.size} / {QC_ITEMS_META.length} 项
+                </span>
+              </div>
+              <p className="text-[11px] text-red-600/80 leading-relaxed">
+                勾选存在异常的检验项（至少 1 项），并为每项填写 <b>异常结果描述</b> 与 <b>处理说明</b>；
+                未勾选的项目将自动视为合格。
+              </p>
+              <div className="space-y-2.5">
+                {QC_ITEMS_META.map((meta, idx) => {
+                  const checked = abnormalItemIds.has(meta.id);
+                  const f = abnormalFields[meta.id] ?? { result: '', handleRemark: '' };
+                  return (
+                    <div
+                      key={meta.id}
+                      className={cn(
+                        'rounded-xl border-2 bg-white transition-all overflow-hidden',
+                        checked ? 'border-red-300 shadow-sm' : 'border-gray-100'
+                      )}
+                    >
+                      <label
+                        className={cn(
+                          'flex items-center gap-3 px-4 py-3 cursor-pointer select-none',
+                          checked ? 'bg-red-50/60' : 'hover:bg-gray-50'
+                        )}
+                      >
+                        <div className="flex items-center justify-center">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAbnormalItem(meta.id)}
+                            className="w-4 h-4 rounded border-gray-300 text-red-500 focus:ring-red-400 cursor-pointer"
+                          />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono text-gray-400">#{String(idx + 1).padStart(2, '0')}</span>
+                            <span className={cn('text-sm font-semibold', checked ? 'text-red-800' : 'text-gray-800')}>
+                              {meta.name}
+                            </span>
+                            {checked && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium">
+                                异常
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-gray-500 mt-0.5 truncate">标准：{meta.standard}</p>
+                        </div>
+                      </label>
+                      {checked && (
+                        <div className="border-t border-red-100 p-3 pt-3.5 space-y-2.5 bg-red-50/30">
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-1 text-[11px] font-medium text-red-700">
+                              <AlertCircle className="w-3 h-3" />
+                              异常结果描述 <span className="text-red-400">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              value={f.result}
+                              onChange={e => updateAbnormalField(meta.id, 'result', e.target.value)}
+                              placeholder={`例：${meta.name}实测值为 xxx，超出标准规定`}
+                              className="w-full px-3 py-2 rounded-lg border border-red-200 bg-white text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 transition-all"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="flex items-center gap-1 text-[11px] font-medium text-red-700">
+                              <AlertTriangle className="w-3 h-3" />
+                              处理说明 <span className="text-red-400">*</span>
+                            </label>
+                            <textarea
+                              value={f.handleRemark}
+                              onChange={e => updateAbnormalField(meta.id, 'handleRemark', e.target.value)}
+                              rows={2}
+                              placeholder="请填写针对本项异常的处理方式、处置建议或后续行动..."
+                              className="w-full px-3 py-2 rounded-lg border border-red-200 bg-white text-sm text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-red-400 transition-all"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             <label className="text-xs font-medium text-gray-600">
               备注/说明
-              {conclusion === 'unqualified' && <span className="text-red-500 ml-0.5">（不合格时必填）</span>}
+              {conclusion === 'unqualified' && <span className="text-gray-400 ml-0.5">（可选，整体补充说明）</span>}
             </label>
             <textarea
               value={remarks}
               onChange={e => setRemarks(e.target.value)}
-              rows={4}
-              placeholder="请填写质检备注、异常情况说明或不合格处理建议等..."
+              rows={3}
+              placeholder={conclusion === 'unqualified'
+                ? '整体补充说明（如批次总处置建议、责任人等，非必填）'
+                : '请填写质检备注、异常情况说明或不合格处理建议等...'}
               className="w-full px-4 py-3 rounded-xl border border-gray-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400 transition-all"
             />
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 bg-gray-50/80 border-t border-gray-100">
+        <div className="flex items-center justify-end gap-3 px-6 py-4 bg-gray-50/80 border-t border-gray-100 shrink-0">
           <button
             onClick={onClose}
             className="px-5 py-2.5 rounded-xl border border-gray-200 bg-white text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"

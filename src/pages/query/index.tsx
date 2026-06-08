@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Search, ShieldCheck, AlertTriangle, XCircle, Globe, AlertCircle,
   Pill, Stethoscope, Clock, FileText, AlertOctagon, Calendar, Factory,
-  Hash, RotateCcw, ChevronRight, MapPin, User, Info
+  Hash, RotateCcw, ChevronRight, MapPin, User, Info, History,
+  Download, Share2, Copy, Printer, Check, Trash2
 } from 'lucide-react';
 import CodeScanner from '@/components/CodeScanner';
 import TraceFlowDiagram from '@/components/TraceFlowDiagram';
@@ -15,21 +16,88 @@ import { useUIStore } from '@/stores/uiStore';
 import { cn } from '@/lib/utils';
 
 type VerifyTab = 'qc' | 'medication' | 'records';
+type QuerySource = '扫码' | '手动输入' | '示例码' | '历史记录';
+
+interface QueryRecord {
+  id: string;
+  traceCode: string;
+  status: 'authentic' | 'suspicious' | 'not_found';
+  statusText: string;
+  queryTime: string;
+  source: QuerySource;
+  productName?: string;
+  batchNo?: string;
+}
+
+const HISTORY_KEY = 'drug_trace_query_history_v1';
+const MAX_HISTORY = 20;
+
+function loadHistory(): QueryRecord[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list: QueryRecord[]) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
+  } catch {}
+}
 
 export default function PublicQuery() {
   const [traceCode, setTraceCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PublicVerifyResult | null>(null);
   const [activeTab, setActiveTab] = useState<VerifyTab>('qc');
-  const { toastError } = useUIStore();
+  const [history, setHistory] = useState<QueryRecord[]>([]);
+  const [lastSource, setLastSource] = useState<QuerySource>('手动输入');
+  const [copied, setCopied] = useState(false);
+  const { toastError, toastSuccess } = useUIStore();
 
-  const handleQuery = async (forcedOrEvent?: string | React.MouseEvent) => {
+  useEffect(() => {
+    setHistory(loadHistory());
+  }, []);
+
+  const addHistory = (rec: QueryRecord) => {
+    const next = [rec, ...history.filter(h => !(h.traceCode === rec.traceCode && h.queryTime !== rec.queryTime))].slice(0, MAX_HISTORY);
+    setHistory(next);
+    saveHistory(next);
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    saveHistory([]);
+    toastSuccess('查询记录已清空');
+  };
+
+  const handleQuery = async (forcedOrEvent?: string | React.MouseEvent, sourceOverride?: QuerySource) => {
     const codeToQuery = (typeof forcedOrEvent === 'string' ? forcedOrEvent : traceCode).trim();
+    const source = sourceOverride || (codeToQuery && SAMPLE_TRACE_CODES.includes(codeToQuery) ? '示例码' : lastSource);
     setLoading(true);
     try {
       const res = await publicQueryService.queryByTraceCode(codeToQuery);
       setResult(res);
       setActiveTab('qc');
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${hh}:${mm}`;
+      const statusText = res.status === 'authentic' ? '真品' : res.status === 'suspicious' ? '多次查询' : '未查询到';
+      addHistory({
+        id: `qh_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+        traceCode: codeToQuery,
+        status: res.status,
+        statusText,
+        queryTime: timeStr,
+        source,
+        productName: res.product?.productName,
+        batchNo: res.product?.batchNo,
+      });
     } finally {
       setLoading(false);
     }
@@ -38,7 +106,8 @@ export default function PublicQuery() {
   const handleScan = (code: string) => {
     const trimmed = code?.trim() || '';
     setTraceCode(trimmed);
-    handleQuery(trimmed);
+    setLastSource('扫码');
+    handleQuery(trimmed, '扫码');
   };
 
   const handleReset = () => {
@@ -47,6 +116,137 @@ export default function PublicQuery() {
 
   const handleSampleClick = (code: string) => {
     setTraceCode(code);
+    setLastSource('示例码');
+  };
+
+  const handleHistoryClick = (rec: QueryRecord) => {
+    setTraceCode(rec.traceCode);
+    setLastSource('历史记录');
+    handleQuery(rec.traceCode, '历史记录');
+  };
+
+  const handleExport = () => {
+    if (!result) return;
+    const time = new Date().toLocaleString('zh-CN');
+    const title = result.status === 'authentic'
+      ? '【药品验真凭证 · 真品】'
+      : result.status === 'suspicious'
+      ? '【药品验真凭证 · 多次查询】'
+      : '【药品验真凭证 · 未查询到】';
+    const lines: string[] = [
+      title,
+      '='.repeat(42),
+      '',
+      `查询时间：${time}`,
+      `追溯码：${traceCode || '（空码）'}`,
+      result.status === 'not_found' ? `查询状态：未查询到追溯信息` : '',
+      result.status === 'authentic' ? `查询次数：第 ${result.verifyCount} 次查询（真品）` : '',
+      result.status === 'suspicious' ? `查询次数：累计 ${result.verifyCount} 次（多次验真，建议核对）` : '',
+      '',
+    ];
+    if (result.product) {
+      lines.push('── 产品基础信息 ──');
+      lines.push(`产品名称：${result.product.productName}`);
+      lines.push(`规格：${result.product.spec}`);
+      lines.push(`批号：${result.product.batchNo}`);
+      lines.push(`生产日期：${result.product.productionDate}`);
+      lines.push(`有效期至：${result.product.expiryDate}`);
+      lines.push(`生产厂家：${result.product.manufacturer}`);
+      if (result.product.isRecalled && result.product.recallInfo) {
+        lines.push('⚠️  召回预警：是');
+        lines.push(`  召回级别：${result.product.recallInfo.level}`);
+        lines.push(`  召回原因：${result.product.recallInfo.reason}`);
+      }
+      if (result.product.isExpiring) {
+        lines.push(`⚠️  近效期提示：剩余 ${result.product.daysToExpiry} 天`);
+      }
+      lines.push('');
+      if (result.qcItems && result.qcItems.length) {
+        lines.push('── 质检结论 ──');
+        const total = result.qcItems.length;
+        const pass = result.qcItems.filter(i => i.conclusion === '合格').length;
+        lines.push(`总检验项 ${total} 项，合格 ${pass} 项，不合格 ${total - pass} 项`);
+        if (total - pass > 0) {
+          result.qcItems.filter(i => i.conclusion !== '合格').forEach(i => {
+            lines.push(`  · 不合格项：${i.itemName}，标准：${i.standardValue}，实测：${i.actualValue}`);
+          });
+        } else {
+          lines.push('总结论：全项合格');
+        }
+        lines.push('');
+      }
+      if (result.traceFlow && result.traceFlow.length) {
+        lines.push('── 追溯链路节点 ──');
+        const typeLabel: Record<string, string> = {
+          raw_material: '原料入库', factory: '生产出厂', warehouse: '仓储', dealer: '经销商', store: '零售门店',
+        };
+        result.traceFlow.forEach(n => {
+          const extra = Object.entries(n.details || {}).map(([k, v]) => `${k}:${v}`).join('，');
+          lines.push(`  · [${typeLabel[n.type] || n.type}] ${n.name}`);
+          lines.push(`      操作人：${n.operator}，地点：${n.location}，时间：${n.time}`);
+          if (extra) lines.push(`      详情：${extra}`);
+        });
+        lines.push('');
+      }
+    } else {
+      lines.push('── 未查询到说明 ──');
+      if (!traceCode.trim()) {
+        lines.push('原因：本次未识别到有效追溯码（扫码内容为空），请重新扫码或手动输入完整追溯码后重试。');
+      } else {
+        lines.push(`原因：系统中不存在追溯码 "${traceCode}" 的备案数据，可能是码格式错误或未在本平台赋码。`);
+      }
+      lines.push('建议：请核对实物包装上的追溯码，确保输入/扫码的 20 位追溯码完整、正确。');
+      lines.push('');
+    }
+    lines.push('='.repeat(42));
+    lines.push('本凭证由药品全链路追溯系统自动生成，仅供参考。');
+    const text = lines.join('\r\n');
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const suffix = traceCode ? traceCode.slice(-6) : 'empty';
+    a.download = `药品验真凭证_${result.status}_${suffix}_${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toastSuccess('验真凭证已导出');
+  };
+
+  const handleShare = async () => {
+    if (!result) return;
+    const lines: string[] = [];
+    const title = result.status === 'authentic' ? '✅ [真品] 药品验真结果' : result.status === 'suspicious' ? '⚠️ [多次查询] 药品验真结果' : '❌ [未查询到] 药品验真结果';
+    lines.push(title);
+    lines.push(`追溯码：${traceCode || '（空码）'}`);
+    if (result.product) {
+      lines.push(`产品：${result.product.productName} ${result.product.spec}`);
+      lines.push(`批号：${result.product.batchNo}，厂家：${result.product.manufacturer}`);
+    } else {
+      lines.push(traceCode ? '未查询到该追溯码的备案信息' : '本次扫码/输入内容为空');
+    }
+    lines.push(`查询时间：${new Date().toLocaleString('zh-CN')}`);
+    const text = lines.join('\n');
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      toastSuccess('凭证信息已复制，可粘贴分享');
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toastError('复制失败，请手动复制');
+    }
   };
 
   if (!result) {
@@ -127,7 +327,7 @@ export default function PublicQuery() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
                 {[
                   {
                     icon: ShieldCheck,
@@ -176,6 +376,98 @@ export default function PublicQuery() {
                   );
                 })}
               </div>
+
+              <div className="rounded-2xl border border-gray-200 bg-gradient-to-br from-white to-gray-50/60 p-5 overflow-hidden">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
+                      <History className="w-4.5 h-4.5" />
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-800 flex items-center gap-1.5">
+                        最近查询记录
+                        <span className="text-xs font-normal text-gray-400">（本地保留最近 {MAX_HISTORY} 条）</span>
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-0.5">点击任意记录可快速重新查询</p>
+                    </div>
+                  </div>
+                  {history.length > 0 && (
+                    <button
+                      onClick={clearHistory}
+                      className="text-xs text-gray-400 hover:text-danger-600 transition-colors inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-danger-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      清空
+                    </button>
+                  )}
+                </div>
+                {history.length === 0 ? (
+                  <div className="rounded-xl border-2 border-dashed border-gray-200 py-8 text-center">
+                    <Clock className="w-8 h-8 mx-auto text-gray-300 mb-2" />
+                    <p className="text-sm text-gray-400">暂无查询记录，扫码或输入追溯码开始验真</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1 -mr-1">
+                    {history.map((rec) => {
+                      const statusColor = rec.status === 'authentic'
+                        ? 'bg-trust-50 text-trust-700 border-trust-200'
+                        : rec.status === 'suspicious'
+                        ? 'bg-warning-50 text-warning-700 border-warning-200'
+                        : 'bg-danger-50 text-danger-700 border-danger-200';
+                      const sourceColor = rec.source === '扫码'
+                        ? 'bg-primary-50 text-primary-700'
+                        : rec.source === '示例码'
+                        ? 'bg-purple-50 text-purple-700'
+                        : rec.source === '历史记录'
+                        ? 'bg-indigo-50 text-indigo-700'
+                        : 'bg-gray-100 text-gray-700';
+                      return (
+                        <button
+                          key={rec.id}
+                          onClick={() => handleHistoryClick(rec)}
+                          className="w-full group text-left rounded-xl border border-gray-200 bg-white hover:border-primary-300 hover:bg-primary-50/40 hover:shadow-sm transition-all duration-200 p-3.5"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={cn('w-11 h-11 shrink-0 rounded-xl border flex items-center justify-center', statusColor)}>
+                              {rec.status === 'authentic'
+                                ? <ShieldCheck className="w-5 h-5" strokeWidth={2.2} />
+                                : rec.status === 'suspicious'
+                                ? <AlertTriangle className="w-5 h-5" strokeWidth={2.2} />
+                                : <XCircle className="w-5 h-5" strokeWidth={2.2} />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <code className="text-sm font-semibold text-gray-800 font-mono truncate max-w-[220px]">
+                                  {rec.traceCode || '（空码查询）'}
+                                </code>
+                                <span className={cn('text-[10px] px-1.5 py-0.5 rounded font-medium', sourceColor)}>
+                                  {rec.source}
+                                </span>
+                                <span className={cn('text-[11px] px-2 py-0.5 rounded-full border font-medium', statusColor)}>
+                                  {rec.statusText}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center gap-3 text-xs text-gray-500 flex-wrap">
+                                <span className="flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {rec.queryTime}
+                                </span>
+                                {rec.productName && (
+                                  <span className="truncate max-w-[200px] text-gray-600">
+                                    {rec.productName}
+                                    {rec.batchNo && <span className="text-gray-400 ml-1">· {rec.batchNo}</span>}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-primary-500 group-hover:translate-x-0.5 shrink-0 transition-all" />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -185,15 +477,43 @@ export default function PublicQuery() {
 
   return (
     <div className="space-y-6 animate-fadeInUp">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-2xl font-serif font-bold text-gray-900">验真查询结果</h1>
-        <button
-          onClick={handleReset}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg btn-secondary text-sm"
-        >
-          <RotateCcw className="w-4 h-4" />
-          重新查询
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleShare}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 text-sm font-medium transition-all',
+              copied && 'text-trust-600 border-trust-200 bg-trust-50'
+            )}
+          >
+            {copied ? (
+              <>
+                <Check className="w-4 h-4" />
+                已复制
+              </>
+            ) : (
+              <>
+                <Share2 className="w-4 h-4" />
+                复制分享
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleExport}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-primary-200 bg-primary-50 text-primary-700 hover:bg-primary-100 text-sm font-medium transition-all"
+          >
+            <Download className="w-4 h-4" />
+            导出凭证
+          </button>
+          <button
+            onClick={handleReset}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg btn-secondary text-sm"
+          >
+            <RotateCcw className="w-4 h-4" />
+            重新查询
+          </button>
+        </div>
       </div>
 
       <div className="card p-8 overflow-hidden">
@@ -225,42 +545,78 @@ export default function PublicQuery() {
           )}
 
           {result.status === 'not_found' && (
-            <div className="flex flex-col items-center">
+            <div className="flex flex-col items-center w-full">
               <div className="w-28 h-28 rounded-full bg-gradient-to-br from-danger-400 to-danger-600 flex items-center justify-center shadow-lg">
                 <XCircle className="w-14 h-14 text-white" strokeWidth={2.5} />
               </div>
               <h2 className="mt-5 text-2xl font-serif font-bold text-danger-700">未查询到追溯信息</h2>
-              <p className="mt-2 text-gray-600">请确认追溯码输入正确，或联系客服咨询</p>
-              {traceCode && (
-                <div className="mt-6 w-full max-w-md space-y-3">
-                  <div className="rounded-xl border-2 border-danger-200 bg-danger-50/60 p-4">
-                    <div className="text-xs text-danger-600 mb-1.5">刚扫到/输入的追溯码</div>
-                    <code className="block font-mono text-sm text-gray-800 bg-white px-3 py-2 rounded-lg border border-danger-200 break-all">
-                      {traceCode || '（空码）'}
-                    </code>
+              <p className="mt-2 text-gray-600">
+                {traceCode.trim() ? '请确认追溯码输入正确，或联系客服咨询' : '扫码内容为空，请对准追溯码重新扫描或手动输入'}
+              </p>
+              <div className="mt-6 w-full max-w-md space-y-3">
+                <div className="rounded-xl border-2 border-danger-200 bg-danger-50/60 p-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="text-xs font-medium text-danger-600">本次查询追溯码</div>
+                    {!traceCode.trim() && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-danger-200 text-danger-800 font-medium">
+                        空码查询
+                      </span>
+                    )}
                   </div>
-                  <div className="flex gap-3">
-                    <div className="relative flex-1">
-                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                      <input
-                        type="text"
-                        value={traceCode}
-                        onChange={(e) => setTraceCode(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
-                        placeholder="核对或修改后重新查询"
-                        className="w-full pl-10 pr-3 py-3 rounded-xl border-2 border-gray-200 bg-white text-gray-900 placeholder-gray-400 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400 text-sm font-mono"
-                      />
-                    </div>
-                    <button
-                      onClick={handleQuery}
-                      className="btn-primary px-5 py-3 text-sm gap-1.5 whitespace-nowrap"
-                    >
-                      <Search className="w-4 h-4" />
-                      重新查询
-                    </button>
-                  </div>
+                  <code className="block font-mono text-sm text-gray-800 bg-white px-3 py-2 rounded-lg border border-danger-200 break-all min-h-[40px] flex items-center">
+                    {traceCode.trim() || <span className="text-gray-400 italic">（扫码内容为空 / 未输入码）</span>}
+                  </code>
+                  {!traceCode.trim() && (
+                    <p className="mt-2 text-[11px] text-danger-600 leading-relaxed bg-white/60 rounded-lg px-2.5 py-1.5 border border-danger-100">
+                      <Info className="w-3.5 h-3.5 inline -mt-0.5 mr-1" />
+                      可能原因：扫码距离过远 / 追溯码污损无法识别 / 设备权限未开启。建议重新对准码面、调整光线后再次扫描，或直接在下方输入框手动键入。
+                    </p>
+                  )}
                 </div>
-              )}
+                <div className="flex gap-3">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      value={traceCode}
+                      onChange={(e) => setTraceCode(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
+                      placeholder={traceCode.trim() ? '核对或修改后重新查询' : '请输入或粘贴20位追溯码'}
+                      className="w-full pl-10 pr-3 py-3 rounded-xl border-2 border-gray-200 bg-white text-gray-900 placeholder-gray-400 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400 text-sm font-mono"
+                      autoFocus
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleQuery()}
+                    className="btn-primary px-5 py-3 text-sm gap-1.5 whitespace-nowrap"
+                  >
+                    <Search className="w-4 h-4" />
+                    查询
+                  </button>
+                </div>
+                {!traceCode.trim() && (
+                  <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+                    <div className="text-[11px] font-medium text-gray-600 mb-2 flex items-center gap-1">
+                      <Info className="w-3.5 h-3.5" />
+                      扫码无结果？试试这些示例码：
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {SAMPLE_TRACE_CODES.map((code) => (
+                        <button
+                          key={code}
+                          onClick={() => {
+                            setTraceCode(code);
+                            setTimeout(() => handleQuery(code, '示例码'), 30);
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white hover:bg-primary-50 hover:text-primary-700 border border-gray-200 hover:border-primary-200 text-[11px] font-mono text-gray-600 transition-all duration-200"
+                        >
+                          {code.slice(0, 6)}...{code.slice(-4)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
