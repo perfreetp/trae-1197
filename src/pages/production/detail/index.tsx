@@ -219,29 +219,54 @@ export default function ProductionDetail() {
       return;
     }
     const overallResult = qcConclusion === 'qualified' ? '合格' : '不合格';
-    const items = DEFAULT_QC_ITEMS.map(it => ({
-      itemName: it.name,
-      standard: it.standard,
-      testResult: it.result,
-      isPass: qcConclusion === 'qualified' ? it.resultType !== 'fail' : it.id === '6',
-    }));
-    const result = await submitQC(id, {
-      reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
-      reportDate: new Date().toISOString().slice(0, 16).replace('T', ' '),
-      inspector: '当前质检员',
-      overallResult: overallResult as any,
-      items,
-      remark: qcRemarks.trim(),
-    } as any);
-    if (result) {
-      toastSuccess(
-        qcConclusion === 'qualified'
-          ? `批次 ${batch?.batchNo} 质检结论：合格，已提交`
-          : `批次 ${batch?.batchNo} 质检结论：不合格，已记录`
-      );
-      setQcModalOpen(false);
+    const inspectorName = '当前质检员';
+    const reportDate = new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+    if (qcConclusion === 'qualified') {
+      const items = DEFAULT_QC_ITEMS.map(it => ({
+        itemName: it.name,
+        standard: it.standard,
+        testResult: it.result,
+        isPass: true,
+      }));
+      const result = await submitQC(id, {
+        reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
+        reportDate,
+        inspector: inspectorName,
+        overallResult,
+        items,
+        remark: qcRemarks.trim(),
+      } as any);
+      if (result) {
+        toastSuccess(`批次 ${batch?.batchNo} 质检结论：合格，已提交`);
+        setQcModalOpen(false);
+      } else {
+        toastError('质检结论提交失败，请重试');
+      }
     } else {
-      toastError('质检结论提交失败，请重试');
+      const failCount = Math.max(1, Math.min(3, Math.ceil(DEFAULT_QC_ITEMS.length * 0.3)));
+      const items = DEFAULT_QC_ITEMS.map((it, idx) => ({
+        itemName: it.name,
+        standard: it.standard,
+        testResult: idx >= DEFAULT_QC_ITEMS.length - failCount
+          ? it.result
+          : it.result,
+        isPass: idx < DEFAULT_QC_ITEMS.length - failCount,
+      }));
+      const result = await submitQC(id, {
+        reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
+        reportDate,
+        inspector: inspectorName,
+        overallResult,
+        items,
+        remark: qcRemarks.trim(),
+      } as any);
+      if (result) {
+        toastSuccess(`批次 ${batch?.batchNo} 质检结论：不合格，已记录`);
+        setQcModalOpen(false);
+      } else {
+        toastError('质检结论提交失败，请重试');
+      }
     }
   };
 

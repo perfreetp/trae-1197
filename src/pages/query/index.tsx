@@ -40,18 +40,13 @@ export default function PublicQuery() {
   };
 
   const handleScan = (code: string) => {
-    const trimmed = code?.trim();
-    setTraceCode(trimmed || '');
-    if (!trimmed) {
-      toastError('未扫描到有效追溯码，请重试');
-      return;
-    }
+    const trimmed = code?.trim() || '';
+    setTraceCode(trimmed);
     handleQuery(trimmed);
   };
 
   const handleReset = () => {
     setResult(null);
-    setTraceCode('');
   };
 
   const handleSampleClick = (code: string) => {
@@ -240,6 +235,36 @@ export default function PublicQuery() {
               </div>
               <h2 className="mt-5 text-2xl font-serif font-bold text-danger-700">未查询到追溯信息</h2>
               <p className="mt-2 text-gray-600">请确认追溯码输入正确，或联系客服咨询</p>
+              {traceCode && (
+                <div className="mt-6 w-full max-w-md space-y-3">
+                  <div className="rounded-xl border-2 border-danger-200 bg-danger-50/60 p-4">
+                    <div className="text-xs text-danger-600 mb-1.5">刚扫到/输入的追溯码</div>
+                    <code className="block font-mono text-sm text-gray-800 bg-white px-3 py-2 rounded-lg border border-danger-200 break-all">
+                      {traceCode || '（空码）'}
+                    </code>
+                  </div>
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        value={traceCode}
+                        onChange={(e) => setTraceCode(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleQuery()}
+                        placeholder="核对或修改后重新查询"
+                        className="w-full pl-10 pr-3 py-3 rounded-xl border-2 border-gray-200 bg-white text-gray-900 placeholder-gray-400 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:border-primary-400 text-sm font-mono"
+                      />
+                    </div>
+                    <button
+                      onClick={handleQuery}
+                      className="btn-primary px-5 py-3 text-sm gap-1.5 whitespace-nowrap"
+                    >
+                      <Search className="w-4 h-4" />
+                      重新查询
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -47,8 +47,24 @@ export interface PaginatedResult<T> {
  */
 export type FilterCondition<T> = Partial<Record<keyof T, string | number | boolean | null | undefined>>;
 
+const STORAGE_KEY = 'drug_traceability_mock_db_v1';
+const STORAGE_VERSION = 1;
+
+interface PersistedDB {
+  version: number;
+  savedAt: number;
+  batches: Batch[];
+  traceCodes: TraceCode[];
+  dealers: Dealer[];
+  stores: Store[];
+  warehouseRecords: WarehouseRecord[];
+  recallOrders: RecallOrder[];
+  operationLogs: OperationLog[];
+  consumerVerifies: ConsumerVerify[];
+}
+
 /**
- * 内存数据库类
+ * 内存数据库类（带 LocalStorage 持久化）
  */
 class MockDatabase {
   private batches: Batch[] = [];
@@ -61,11 +77,62 @@ class MockDatabase {
   private consumerVerifies: ConsumerVerify[] = [];
   private initialized = false;
 
+  private save(): void {
+    try {
+      const payload: PersistedDB = {
+        version: STORAGE_VERSION,
+        savedAt: Date.now(),
+        batches: this.batches,
+        traceCodes: this.traceCodes,
+        dealers: this.dealers,
+        stores: this.stores,
+        warehouseRecords: this.warehouseRecords,
+        recallOrders: this.recallOrders,
+        operationLogs: this.operationLogs,
+        consumerVerifies: this.consumerVerifies,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch (e) {
+      console.warn('[MockDB] persist failed:', e);
+    }
+  }
+
+  private load(): boolean {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as PersistedDB;
+      if (!parsed || parsed.version !== STORAGE_VERSION || !Array.isArray(parsed.batches)) {
+        localStorage.removeItem(STORAGE_KEY);
+        return false;
+      }
+      this.batches = parsed.batches || [];
+      this.traceCodes = parsed.traceCodes || [];
+      this.dealers = parsed.dealers || [];
+      this.stores = parsed.stores || [];
+      this.warehouseRecords = parsed.warehouseRecords || [];
+      this.recallOrders = parsed.recallOrders || [];
+      this.operationLogs = parsed.operationLogs || [];
+      this.consumerVerifies = parsed.consumerVerifies || [];
+      return this.batches.length > 0 || this.dealers.length > 0;
+    } catch (e) {
+      console.warn('[MockDB] restore failed:', e);
+      localStorage.removeItem(STORAGE_KEY);
+      return false;
+    }
+  }
+
   /**
    * 初始化数据库，首次加载时调用
    */
   public init(): void {
     if (this.initialized) return;
+
+    const restored = this.load();
+    if (restored) {
+      this.initialized = true;
+      return;
+    }
 
     this.batches = generateBatches(15);
     this.dealers = generateDealers();
@@ -99,6 +166,7 @@ class MockDatabase {
     this.consumerVerifies = generateConsumerVerifies(this.batches);
 
     this.initialized = true;
+    this.save();
   }
 
   /**
@@ -185,6 +253,7 @@ class MockDatabase {
       isFrozen: data.isFrozen || false,
     };
     this.batches.unshift(newBatch);
+    this.save();
     return newBatch;
   }
 
@@ -196,6 +265,7 @@ class MockDatabase {
       ...data,
       updatedAt: dayjs().format('YYYY-MM-DD HH:mm:ss'),
     };
+    this.save();
     return this.batches[idx];
   }
 
@@ -203,6 +273,7 @@ class MockDatabase {
     const idx = this.batches.findIndex(b => b.id === id);
     if (idx === -1) return false;
     this.batches.splice(idx, 1);
+    this.save();
     return true;
   }
 
@@ -224,6 +295,7 @@ class MockDatabase {
     };
     batch.rawMaterials.push(newMaterial);
     batch.updatedAt = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    this.save();
     return newMaterial;
   }
 
@@ -237,6 +309,7 @@ class MockDatabase {
     if (stepIdx === -1) return null;
     batch.processSteps[stepIdx] = { ...batch.processSteps[stepIdx], ...data };
     batch.updatedAt = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    this.save();
     return batch.processSteps[stepIdx];
   }
 
@@ -256,8 +329,9 @@ class MockDatabase {
       remark: data.remark || '',
     };
     batch.qcReport = qcReport;
-    batch.status = '质检中';
+    batch.status = qcReport.overallResult === '合格' ? '已完成' : '质检中';
     batch.updatedAt = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    this.save();
     return qcReport;
   }
 
@@ -273,6 +347,7 @@ class MockDatabase {
 
   public createTraceCodes(codes: TraceCode[]): TraceCode[] {
     this.traceCodes.push(...codes);
+    this.save();
     return codes;
   }
 
@@ -280,6 +355,7 @@ class MockDatabase {
     const idx = this.traceCodes.findIndex(t => t.code === code);
     if (idx === -1) return null;
     this.traceCodes[idx] = { ...this.traceCodes[idx], ...data };
+    this.save();
     return this.traceCodes[idx];
   }
 
@@ -294,6 +370,7 @@ class MockDatabase {
       productName: batch.productName,
     }));
     this.traceCodes.push(...codes);
+    this.save();
     return codes;
   }
 
@@ -378,6 +455,7 @@ class MockDatabase {
       remark: data.remark || '',
     };
     this.warehouseRecords.unshift(record);
+    this.save();
     return record;
   }
 
@@ -422,6 +500,7 @@ class MockDatabase {
       progressList: data.progressList || [],
     };
     this.recallOrders.unshift(order);
+    this.save();
     return order;
   }
 
@@ -429,6 +508,7 @@ class MockDatabase {
     const idx = this.recallOrders.findIndex(r => r.id === id);
     if (idx === -1) return null;
     this.recallOrders[idx] = { ...this.recallOrders[idx], ...data };
+    this.save();
     return this.recallOrders[idx];
   }
 
@@ -453,6 +533,7 @@ class MockDatabase {
       status: data.status || '成功',
     };
     this.operationLogs.unshift(log);
+    this.save();
     return log;
   }
 
