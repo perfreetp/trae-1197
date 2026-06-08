@@ -25,10 +25,6 @@ export default function PublicQuery() {
 
   const handleQuery = async (forcedOrEvent?: string | React.MouseEvent) => {
     const codeToQuery = (typeof forcedOrEvent === 'string' ? forcedOrEvent : traceCode).trim();
-    if (!codeToQuery) {
-      toastError('请输入或扫描追溯码');
-      return;
-    }
     setLoading(true);
     try {
       const res = await publicQueryService.queryByTraceCode(codeToQuery);

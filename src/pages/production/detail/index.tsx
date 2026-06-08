@@ -223,19 +223,22 @@ export default function ProductionDetail() {
     const reportDate = new Date().toISOString().slice(0, 16).replace('T', ' ');
 
     if (qcConclusion === 'qualified') {
-      const items = DEFAULT_QC_ITEMS.map(it => ({
-        itemName: it.name,
-        standard: it.standard,
-        testResult: it.result,
-        isPass: true,
-      }));
+      const items = [
+        { itemName: '外观性状', standard: '本品为白色或类白色片', testResult: '本品为白色片，色泽均匀，符合规定', isPass: true },
+        { itemName: '重量差异', standard: '±7.5%以内', testResult: '平均片重0.2512g，RSD=1.23%，在±7.5%范围内', isPass: true },
+        { itemName: '崩解时限', standard: '≤30分钟', testResult: '12.5分钟全部崩解，远低于30分钟上限', isPass: true },
+        { itemName: '溶出度', standard: '≥80%（30min）', testResult: '平均溶出度92.3%，达到标准要求', isPass: true },
+        { itemName: '含量测定', standard: '标示量的95.0%~105.0%', testResult: '平均含量99.62%，落在95.0%~105.0%区间内', isPass: true },
+        { itemName: '微生物限度', standard: '细菌总数≤1000cfu/g', testResult: '细菌总数<10cfu/g，霉菌、酵母菌均未检出', isPass: true },
+        { itemName: '有关物质', standard: '单个杂质≤0.5%，总杂质≤1.5%', testResult: '单个最大杂质0.12%，总杂质0.28%，符合规定', isPass: true },
+      ];
       const result = await submitQC(id, {
         reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
         reportDate,
         inspector: inspectorName,
         overallResult,
         items,
-        remark: qcRemarks.trim(),
+        remark: qcRemarks.trim() || '全项检验合格，准予放行。',
       } as any);
       if (result) {
         toastSuccess(`批次 ${batch?.batchNo} 质检结论：合格，已提交`);
@@ -244,15 +247,15 @@ export default function ProductionDetail() {
         toastError('质检结论提交失败，请重试');
       }
     } else {
-      const failCount = Math.max(1, Math.min(3, Math.ceil(DEFAULT_QC_ITEMS.length * 0.3)));
-      const items = DEFAULT_QC_ITEMS.map((it, idx) => ({
-        itemName: it.name,
-        standard: it.standard,
-        testResult: idx >= DEFAULT_QC_ITEMS.length - failCount
-          ? it.result
-          : it.result,
-        isPass: idx < DEFAULT_QC_ITEMS.length - failCount,
-      }));
+      const items = [
+        { itemName: '外观性状', standard: '本品为白色或类白色片', testResult: '本品为白色片，色泽均匀，符合规定', isPass: true },
+        { itemName: '重量差异', standard: '±7.5%以内', testResult: '平均片重0.2508g，RSD=1.45%，在±7.5%范围内', isPass: true },
+        { itemName: '崩解时限', standard: '≤30分钟', testResult: '14.2分钟全部崩解，符合要求', isPass: true },
+        { itemName: '溶出度', standard: '≥80%（30min）', testResult: '平均溶出度91.7%，达到标准要求', isPass: true },
+        { itemName: '含量测定', standard: '标示量的95.0%~105.0%', testResult: '平均含量98.45%，落在规定区间内', isPass: true },
+        { itemName: '微生物限度', standard: '细菌总数≤1000cfu/g', testResult: '细菌总数1260cfu/g，超标26%，霉菌检出15cfu/g', isPass: false },
+        { itemName: '有关物质', standard: '单个杂质≤0.5%，总杂质≤1.5%', testResult: '单个最大杂质0.14%，总杂质0.30%，符合规定', isPass: true },
+      ];
       const result = await submitQC(id, {
         reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
         reportDate,
