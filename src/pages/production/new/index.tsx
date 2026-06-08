@@ -232,6 +232,28 @@ export default function NewProduction() {
     try {
       const batchNo = `P${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`;
 
+      const rawMaterials = data.materials.map((m, idx) => ({
+        id: `mat_${Date.now()}_${idx}`,
+        name: m.rawMaterialName,
+        batchNo: m.rawMaterialNo,
+        supplier: m.supplierName,
+        quantity: Math.floor(20 + Math.random() * 200),
+        unit: 'kg',
+        receiveDate: m.inboundDate,
+        inspectionResult: '合格' as const,
+      }));
+
+      const processSteps = data.processSteps.map((s, idx) => ({
+        id: `step_${Date.now()}_${idx}`,
+        stepOrder: s.stepOrder,
+        stepName: s.stepName as any,
+        startTime: '',
+        endTime: null,
+        operator: s.operator,
+        parameters: { 设备: s.equipment } as Record<string, string | number>,
+        status: '待开始' as const,
+      }));
+
       const batch = await createBatch({
         batchNo,
         productName: data.baseInfo.productName,
@@ -245,7 +267,10 @@ export default function NewProduction() {
         unit: data.baseInfo.unit,
         manager: data.baseInfo.manager,
         processRoute: data.baseInfo.processRoute,
-      });
+        rawMaterials,
+        processSteps,
+        qcReport: null,
+      } as any);
 
       await new Promise(r => setTimeout(r, 800));
       toastSuccess(`批次 ${batchNo} 创建成功！`);

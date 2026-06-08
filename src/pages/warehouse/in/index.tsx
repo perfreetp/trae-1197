@@ -28,7 +28,7 @@ const LOCATIONS = ['A-01-01', 'A-02-03', 'A-03-05', 'B-01-02', 'B-02-04', 'B-03-
 
 export default function WarehouseInPage() {
   const navigate = useNavigate();
-  const { recentScans, scanInbound, scanning, clearRecentScans } = useWarehouseStore();
+  const { recentScans, scanInbound, scanning, clearRecentScans, error } = useWarehouseStore();
   const { toastSuccess, toastError, setPageTitle } = useUIStore();
   const [warehouse, setWarehouse] = useState(WAREHOUSES[0]);
   const [location, setLocation] = useState(LOCATIONS[0]);
@@ -62,7 +62,7 @@ export default function WarehouseInPage() {
       toastSuccess('入库成功', `追溯码 ${code.slice(-10)} 已入库至 ${warehouse}/${location}`);
       setCodeInput('');
     } else {
-      toastError('入库失败', '追溯码不存在、已入库或状态异常');
+      toastError('入库失败', error || '追溯码不存在、已入库或状态异常');
     }
     inputRef.current?.focus();
   };

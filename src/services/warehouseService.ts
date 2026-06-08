@@ -1,7 +1,47 @@
 
 import { db, PaginationParams, PaginatedResult, FilterCondition } from './mock/database';
-import { WarehouseRecord } from './mock/generators';
+import { WarehouseRecord, TraceCode } from './mock/generators';
 import dayjs from 'dayjs';
+
+export type InboundFailReason = 'code_not_found' | 'status_conflict';
+export type OutboundFailReason = 'code_not_found' | 'status_conflict' | 'batch_frozen';
+
+export interface ScanInboundSuccess {
+  success: true;
+  record: WarehouseRecord;
+  code: TraceCode;
+}
+export interface ScanInboundFail {
+  success: false;
+  reason: InboundFailReason;
+  codeStatus?: string;
+  message: string;
+}
+export type ScanInboundResult = ScanInboundSuccess | ScanInboundFail;
+
+export interface ScanOutboundSuccess {
+  success: true;
+  record: WarehouseRecord;
+  code: TraceCode;
+  batchNo: string;
+}
+export interface ScanOutboundFail {
+  success: false;
+  reason: OutboundFailReason;
+  codeStatus?: string;
+  batchNo?: string;
+  message: string;
+}
+export type ScanOutboundResult = ScanOutboundSuccess | ScanOutboundFail;
+
+const INBOUND_FORBIDDEN_STATUS: ReadonlySet<string> = new Set([
+  '已入库',
+  '已出库',
+  '经销商签收',
+  '门店收货',
+  '已召回',
+  '已验真',
+]);
 
 /**
  * 模拟网络延时
@@ -59,9 +99,32 @@ export const warehouseService = {
   /**
    * 入库扫码
    */
-  async scanInbound(traceCode: string, warehouse: string, location: string, operator: string): Promise<WarehouseRecord | null> {
+  async scanInbound(traceCode: string, warehouse: string, location: string, operator: string): Promise<ScanInboundResult> {
     const code = db.getTraceCodeByCode(traceCode);
-    if (!code) return delay(null);
+    if (!code) {
+      return delay({
+        success: false,
+        reason: 'code_not_found',
+        message: '追溯码不存在，请检查后重试',
+      });
+    }
+
+    if (INBOUND_FORBIDDEN_STATUS.has(code.status)) {
+      const statusMsg: Record<string, string> = {
+        '已入库': '该追溯码已于此前完成入库登记',
+        '已出库': '该追溯码已完成出库发货，禁止重复入库',
+        '经销商签收': '该追溯码已由经销商签收，禁止重复入库',
+        '门店收货': '该追溯码已在门店收货完成，禁止重复入库',
+        '已召回': '该追溯码所属批次正在召回流程，禁止入库',
+        '已验真': '该追溯码已被消费者验真，禁止重复入库',
+      };
+      return delay({
+        success: false,
+        reason: 'status_conflict',
+        codeStatus: code.status,
+        message: `${statusMsg[code.status] || `该追溯码当前状态为「${code.status}」`}，禁止入库`,
+      });
+    }
 
     const batch = db.getBatch(code.batchId);
     const qty = code.level === '箱' ? 200 : code.level === '盒' ? 10 : 1;
@@ -91,18 +154,40 @@ export const warehouseService = {
       remark: `${warehouse} ${location}`,
     });
 
-    return delay(record);
+    return delay({ success: true, record, code });
   },
 
   /**
    * 出库扫码
    */
-  async scanOutbound(traceCode: string, dealerId: string, orderId: string, operator: string): Promise<WarehouseRecord | null> {
+  async scanOutbound(traceCode: string, dealerId: string, orderId: string, operator: string): Promise<ScanOutboundResult> {
     const code = db.getTraceCodeByCode(traceCode);
-    if (!code) return delay(null);
-    if (code.status !== '已入库') return delay(null);
+    if (!code) {
+      return delay({
+        success: false,
+        reason: 'code_not_found',
+        message: '追溯码不存在，请检查后重试',
+      });
+    }
+    if (code.status !== '已入库') {
+      return delay({
+        success: false,
+        reason: 'status_conflict',
+        codeStatus: code.status,
+        message: `追溯码当前状态为「${code.status}」，仅「已入库」状态允许出库`,
+      });
+    }
 
     const batch = db.getBatch(code.batchId);
+    if (batch?.isFrozen) {
+      return delay({
+        success: false,
+        reason: 'batch_frozen',
+        batchNo: batch.batchNo,
+        message: `批次 ${batch.batchNo} 已冻结，禁止出库流通`,
+      });
+    }
+
     const dealer = db.getDealer(dealerId);
     const qty = code.level === '箱' ? 200 : code.level === '盒' ? 10 : 1;
 
@@ -133,7 +218,12 @@ export const warehouseService = {
       remark: `经销商：${dealer?.dealerName || dealerId}，订单：${orderId}`,
     });
 
-    return delay(record);
+    return delay({
+      success: true,
+      record,
+      code,
+      batchNo: batch?.batchNo || '',
+    });
   },
 
   /**

@@ -66,23 +66,40 @@ const MOCK_MATERIALS = [
   { id: 'm5', supplierName: '浙江仙琚制药股份有限公司', rawMaterialNo: 'RM20240301-4', rawMaterialName: '药用乳糖', inboundDate: '2024-03-01', qcCertNo: 'QC2024030107', qty: 80, unit: 'kg' },
 ];
 
+const DEFAULT_QC_ITEMS = QC_ITEMS;
+
 export default function ProductionDetail() {
   const { id = '' } = useParams();
   const navigate = useNavigate();
-  const { batches, loadBatches, updateBatch, loading } = useBatchStore();
+  const { batches, loadBatches, loadBatch, currentBatch, updateBatch, submitQC, loading, detailLoading } = useBatchStore();
   const { setPageTitle, toastSuccess, toastError } = useUIStore();
 
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [qcModalOpen, setQcModalOpen] = useState(false);
-  const [qcConclusion, setQcConclusion] = useState<'qualified' | 'unqualified' | 'pending'>('pending');
-  const [qcRemarks, setQcRemarks] = useState('');
+
+  const batch = currentBatch?.id === id ? currentBatch : batches.find(b => b.id === id);
+
+  const qcConclusionFromReport: 'qualified' | 'unqualified' | 'pending' =
+    batch?.qcReport?.overallResult === '合格'
+      ? 'qualified'
+      : batch?.qcReport?.overallResult === '不合格'
+      ? 'unqualified'
+      : 'pending';
+  const [qcConclusion, setQcConclusion] = useState<'qualified' | 'unqualified' | 'pending'>(qcConclusionFromReport);
+  const [qcRemarks, setQcRemarks] = useState(batch?.qcReport?.remark ?? '');
 
   useEffect(() => {
     setPageTitle('批次详情');
-    if (batches.length === 0) loadBatches({ page: 1, pageSize: 100 });
-  }, [setPageTitle, loadBatches, batches.length]);
+    if (id) loadBatch(id);
+    else if (batches.length === 0) loadBatches({ page: 1, pageSize: 100 });
+  }, [setPageTitle, loadBatch, loadBatches, batches.length, id]);
 
-  const batch = batches.find(b => b.id === id);
+  useEffect(() => {
+    if (batch?.qcReport) {
+      setQcConclusion(qcConclusionFromReport);
+      setQcRemarks(batch.qcReport.remark ?? '');
+    }
+  }, [batch?.qcReport, qcConclusionFromReport]);
 
   const statusBadgeConfig: Record<string, string> = {
     待生产: 'bg-slate-100 text-slate-700 border-slate-200',
@@ -192,20 +209,43 @@ export default function ProductionDetail() {
     },
   ];
 
-  const handleSubmitQC = () => {
+  const handleSubmitQC = async () => {
     if (qcConclusion === 'pending') {
       toastError('请选择质检结论');
       return;
     }
-    toastSuccess(
-      qcConclusion === 'qualified'
-        ? `批次 ${batch?.batchNo} 质检结论：合格，已提交`
-        : `批次 ${batch?.batchNo} 质检结论：不合格，需要处理`
-    );
-    setQcModalOpen(false);
+    if (qcConclusion === 'unqualified' && qcRemarks.trim().length < 5) {
+      toastError('不合格结论请填写不少于5字的处理说明');
+      return;
+    }
+    const overallResult = qcConclusion === 'qualified' ? '合格' : '不合格';
+    const items = DEFAULT_QC_ITEMS.map(it => ({
+      itemName: it.name,
+      standard: it.standard,
+      testResult: it.result,
+      isPass: qcConclusion === 'qualified' ? it.resultType !== 'fail' : it.id === '6',
+    }));
+    const result = await submitQC(id, {
+      reportNo: `QC${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}${String(new Date().getDate()).padStart(2, '0')}${String(Math.floor(Math.random() * 9000) + 1000)}`,
+      reportDate: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      inspector: '当前质检员',
+      overallResult: overallResult as any,
+      items,
+      remark: qcRemarks.trim(),
+    } as any);
+    if (result) {
+      toastSuccess(
+        qcConclusion === 'qualified'
+          ? `批次 ${batch?.batchNo} 质检结论：合格，已提交`
+          : `批次 ${batch?.batchNo} 质检结论：不合格，已记录`
+      );
+      setQcModalOpen(false);
+    } else {
+      toastError('质检结论提交失败，请重试');
+    }
   };
 
-  if (loading && !batch) {
+  if ((loading || detailLoading) && !batch) {
     return (
       <div className="min-h-[50vh] flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -240,7 +280,61 @@ export default function ProductionDetail() {
   const planQty = batch.planQty ?? 0;
   const actualQty = batch.actualQty ?? 0;
   const passRate = planQty > 0 ? Math.min(100, Math.round((actualQty / planQty) * 100)) : 0;
-  const processProgress = Math.round(mockProcessSteps.filter(s => s.status === 'completed').length / mockProcessSteps.length * 100);
+
+  const realMaterials = (batch.rawMaterials?.length ? batch.rawMaterials : (MOCK_MATERIALS as any)).map((m: any, i: number) => ({
+    id: m.id || `m${i}`,
+    supplierName: m.supplierName || m.supplier || '未知供应商',
+    rawMaterialNo: m.rawMaterialNo || m.batchNo || 'N/A',
+    rawMaterialName: m.rawMaterialName || m.name || '未知原料',
+    inboundDate: m.inboundDate || m.receiveDate || m.receivedDate || '',
+    qcCertNo: m.qcCertNo || m.qcCert || '-',
+    qty: m.qty ?? m.quantity ?? 0,
+    unit: m.unit ?? 'kg',
+    inspectionResult: m.inspectionResult,
+  }));
+
+  const realSteps: ProcessStepData[] = batch.processSteps?.length
+    ? batch.processSteps.map((s: any) => ({
+        id: s.id,
+        stepOrder: s.stepOrder,
+        stepName: s.stepName,
+        operator: s.operator || '—',
+        equipment: s.equipment || (s.parameters as any)?.设备 || '-',
+        startTime: s.startTime || undefined,
+        endTime: s.endTime || undefined,
+        status: s.status === '已完成' ? 'completed' : s.status === '进行中' ? 'processing' : 'pending',
+        parameters: s.parameters || {},
+        remark: s.remark || '',
+      }))
+    : mockProcessSteps;
+
+  const processProgress = realSteps.length
+    ? Math.round(realSteps.filter(s => s.status === 'completed').length / realSteps.length * 100)
+    : 0;
+
+  const realQCItems: {
+    id: string;
+    name: string;
+    standard: string;
+    result: string;
+    resultType: 'pending' | 'pass' | 'fail';
+    inspector: string;
+    inspectTime: string;
+  }[] = batch.qcReport?.items?.length
+    ? batch.qcReport.items.map((it: any, idx: number) => ({
+        id: String(idx + 1),
+        name: it.itemName || it.name || `检验项${idx + 1}`,
+        standard: it.standard || '—',
+        result: it.testResult || it.actual || '已检验',
+        resultType: ((it.isPass === true || it.result === true) ? 'pass' : it.isPass === false ? 'fail' : 'pending') as 'pending' | 'pass' | 'fail',
+        inspector: batch.qcReport?.inspector || '质检员',
+        inspectTime: batch.qcReport?.reportDate || '',
+      }))
+    : DEFAULT_QC_ITEMS;
+
+  const qcProgress = realQCItems.length
+    ? Math.round(realQCItems.filter((i: any) => i.resultType !== 'pending').length / realQCItems.length * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -318,9 +412,9 @@ export default function ProductionDetail() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <ProgressCard label="生产进度" value={processProgress} color="blue" hint={`${mockProcessSteps.filter(s => s.status === 'completed').length}/${mockProcessSteps.length} 道工序`} />
+              <ProgressCard label="生产进度" value={processProgress} color="blue" hint={`${realSteps.filter(s => s.status === 'completed').length}/${realSteps.length} 道工序`} />
               <ProgressCard label="合格率" value={passRate} color={passRate >= 95 ? 'green' : passRate >= 90 ? 'amber' : 'red'} hint={`实际 ${actualQty.toLocaleString()} / 计划 ${planQty.toLocaleString()}`} />
-              <ProgressCard label="质检进度" value={QC_ITEMS.filter(i => i.resultType !== 'pending').length / QC_ITEMS.length * 100} color="purple" hint={`${QC_ITEMS.filter(i => i.resultType !== 'pending').length}/${QC_ITEMS.length} 项已检`} />
+              <ProgressCard label="质检进度" value={qcProgress} color="purple" hint={`${realQCItems.filter((i: any) => i.resultType !== 'pending').length}/${realQCItems.length} 项已检`} />
             </div>
           </div>
 
@@ -383,13 +477,15 @@ export default function ProductionDetail() {
 
         <div className="p-5 md:p-7">
           {activeTab === 'overview' && <OverviewTab batch={batch} />}
-          {activeTab === 'materials' && <MaterialsTab />}
-          {activeTab === 'process' && <ProcessTab steps={mockProcessSteps} />}
+          {activeTab === 'materials' && <MaterialsTab materials={realMaterials} />}
+          {activeTab === 'process' && <ProcessTab steps={realSteps} />}
           {activeTab === 'qc' && (
             <QCTab
               batchNo={batch.batchNo}
               onOpenSubmit={() => setQcModalOpen(true)}
-              conclusion={qcConclusion}
+              conclusion={qcConclusionFromReport}
+              items={realQCItems}
+              qcReport={batch.qcReport as any}
             />
           )}
         </div>
@@ -603,17 +699,18 @@ function MetricCard({
   );
 }
 
-function MaterialsTab() {
+function MaterialsTab({ materials }: { materials: any[] }) {
   const { toastSuccess } = useUIStore();
+  const totalQty = materials.reduce((a: number, b: any) => a + (Number(b.qty) || 0), 0);
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <h3 className="text-base font-semibold text-gray-800 flex items-center gap-2">
           <FlaskConical className="w-4 h-4 text-primary" />
-          原料清单（共 {MOCK_MATERIALS.length} 种）
+          原料清单（共 {materials.length} 种）
         </h3>
         <button
-          onClick={() => toastSuccess('原料登记功能')}
+          onClick={() => toastSuccess('请在批次创建时登记完整原料信息')}
           className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-100 bg-emerald-50 text-emerald-600 text-sm font-medium hover:bg-emerald-100 transition-colors"
         >
           <Plus className="w-4 h-4" />
@@ -636,8 +733,8 @@ function MaterialsTab() {
             </tr>
           </thead>
           <tbody>
-            {MOCK_MATERIALS.map((m, i) => (
-              <tr key={m.id} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
+            {materials.map((m: any, i: number) => (
+              <tr key={m.id || i} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
                 <td className="px-6 md:px-7 py-4 text-xs text-gray-400 font-mono">{String(i + 1).padStart(2, '0')}</td>
                 <td className="px-3 py-4">
                   <p className="text-sm font-medium text-gray-800">{m.supplierName}</p>
@@ -661,9 +758,14 @@ function MaterialsTab() {
                   </span>
                 </td>
                 <td className="px-6 md:px-7 py-4 text-center">
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-50 text-green-600 border border-green-100 text-[11px] font-semibold">
-                    <Check className="w-3 h-3" />
-                    已核验
+                  <span className={cn(
+                    "inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-[11px] font-semibold",
+                    m.inspectionResult === '不合格'
+                      ? 'bg-red-50 text-red-600 border-red-100'
+                      : 'bg-green-50 text-green-600 border-green-100'
+                  )}>
+                    {m.inspectionResult === '不合格' ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                    {m.inspectionResult || '已核验'}
                   </span>
                 </td>
               </tr>
@@ -675,15 +777,18 @@ function MaterialsTab() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="p-4 rounded-2xl bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-100">
           <p className="text-xs text-sky-600 mb-1">原料种类</p>
-          <p className="text-2xl font-bold text-sky-700">{MOCK_MATERIALS.length}<span className="text-xs font-normal ml-1">种</span></p>
+          <p className="text-2xl font-bold text-sky-700">{materials.length}<span className="text-xs font-normal ml-1">种</span></p>
         </div>
         <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-green-50 border border-emerald-100">
           <p className="text-xs text-emerald-600 mb-1">总投料量</p>
-          <p className="text-2xl font-bold text-emerald-700">{MOCK_MATERIALS.reduce((a, b) => a + b.qty, 0).toLocaleString()}<span className="text-xs font-normal ml-1">kg</span></p>
+          <p className="text-2xl font-bold text-emerald-700">{totalQty.toLocaleString()}<span className="text-xs font-normal ml-1">kg</span></p>
         </div>
         <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-100">
           <p className="text-xs text-indigo-600 mb-1">质检状态</p>
-          <p className="text-2xl font-bold text-indigo-700">100%<span className="text-xs font-normal ml-1">合格</span></p>
+          <p className="text-2xl font-bold text-indigo-700">
+            {materials.length ? Math.round(materials.filter((m: any) => m.inspectionResult !== '不合格').length / materials.length * 100) : 0}%
+            <span className="text-xs font-normal ml-1">合格</span>
+          </p>
         </div>
       </div>
     </div>
@@ -714,10 +819,19 @@ function QCTab({
   batchNo,
   onOpenSubmit,
   conclusion,
+  items,
+  qcReport,
 }: {
   batchNo: string;
   onOpenSubmit: () => void;
   conclusion: 'qualified' | 'unqualified' | 'pending';
+  items: typeof DEFAULT_QC_ITEMS;
+  qcReport?: {
+    reportNo?: string;
+    reportDate?: string;
+    inspector?: string;
+    remark?: string;
+  } | null;
 }) {
   const { toastSuccess } = useUIStore();
   const attachments = [
@@ -726,7 +840,7 @@ function QCTab({
     { id: 'f3', name: '微生物限度报告.pdf', size: '1.1MB', uploader: '赵质检', time: '2024-03-16 15:30' },
   ];
 
-  const passCount = QC_ITEMS.filter(i => i.resultType === 'pass').length;
+  const passCount = items.filter((i: any) => i.resultType === 'pass').length;
 
   const conclusionBadge =
     conclusion === 'qualified' ? (
@@ -774,11 +888,54 @@ function QCTab({
         </button>
       </div>
 
+      {qcReport && (qcReport.reportNo || qcReport.remark) && (
+                <div className={cn(
+                  "rounded-2xl border-2 p-4 space-y-2",
+                  conclusion === 'unqualified'
+                    ? "bg-red-50/50 border-red-200"
+                    : "bg-indigo-50/50 border-indigo-200"
+                )}>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    {qcReport.reportNo && (
+                      <div>
+                        <span className="text-gray-500">报告编号：</span>
+                        <span className="font-mono font-semibold text-gray-800">{qcReport.reportNo}</span>
+                      </div>
+                    )}
+                    {qcReport.reportDate && (
+                      <div>
+                        <span className="text-gray-500">质检日期：</span>
+                        <span className="font-medium text-gray-800">{qcReport.reportDate}</span>
+                      </div>
+                    )}
+                    {qcReport.inspector && (
+                      <div>
+                        <span className="text-gray-500">质检员：</span>
+                        <span className="font-medium text-gray-800">{qcReport.inspector}</span>
+                      </div>
+                    )}
+                  </div>
+                  {qcReport.remark && (
+                    <div>
+                      <p className={cn(
+                        "text-xs font-medium mb-1",
+                        conclusion === 'unqualified' ? "text-red-600" : "text-indigo-600"
+                      )}>
+                        {conclusion === 'unqualified' ? '不合格说明 / 处理建议' : '质检备注'}
+                      </p>
+                      <p className="text-sm text-gray-700 leading-relaxed bg-white/60 rounded-xl px-3 py-2 border border-gray-100">
+                        {qcReport.remark}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <StatCardMini title="总检验项" value={QC_ITEMS.length} color="blue" />
+        <StatCardMini title="总检验项" value={items.length} color="blue" />
         <StatCardMini title="合格项" value={passCount} color="green" />
-        <StatCardMini title="不合格项" value={QC_ITEMS.filter(i => i.resultType === 'fail').length || 0} color="red" />
-        <StatCardMini title="待检项" value={QC_ITEMS.filter(i => i.resultType === 'pending').length} color="amber" />
+        <StatCardMini title="不合格项" value={items.filter((i: any) => i.resultType === 'fail').length || 0} color="red" />
+        <StatCardMini title="待检项" value={items.filter((i: any) => i.resultType === 'pending').length} color="amber" />
       </div>
 
       <div>
@@ -800,7 +957,7 @@ function QCTab({
               </tr>
             </thead>
             <tbody>
-              {QC_ITEMS.map((item, i) => (
+              {items.map((item: any, i: number) => (
                 <tr key={item.id} className="border-b border-gray-50 hover:bg-gray-50/60 transition-colors">
                   <td className="px-6 md:px-7 py-3.5 text-xs text-gray-400 font-mono">{String(i + 1).padStart(2, '0')}</td>
                   <td className="px-3 py-3.5">

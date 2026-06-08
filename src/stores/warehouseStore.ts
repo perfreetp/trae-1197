@@ -1,8 +1,13 @@
 
 import { create } from 'zustand';
-import { warehouseService, InventoryItem, WarehouseQueryParams, InventoryQueryParams } from '../services/warehouseService';
+import { warehouseService, InventoryItem, WarehouseQueryParams, InventoryQueryParams, ScanInboundFail, ScanOutboundFail } from '../services/warehouseService';
 import { WarehouseRecord } from '../services/mock/generators';
 import { PaginatedResult } from '../services/mock/database';
+
+export type ScanFailReason =
+  | 'code_not_found'
+  | 'status_conflict'
+  | 'batch_frozen';
 
 /**
  * 扫码结果项
@@ -17,7 +22,10 @@ export interface ScanResult {
   operator: string;
   time: string;
   status: 'success' | 'error';
-  message?: string;
+  message: string;
+  failReason?: ScanFailReason;
+  codeStatus?: string;
+  frozenBatchNo?: string;
 }
 
 /**
@@ -88,23 +96,25 @@ export const useWarehouseStore = create<WarehouseState>((set, get) => ({
     set({ scanning: true, error: null });
     try {
       const result = await warehouseService.scanInbound(traceCode, warehouse, location, operator);
-      if (result) {
+      if (result.success) {
+        const { record } = result;
         const scan: ScanResult = {
-          id: result.id,
+          id: record.id,
           code: traceCode,
           type: '入库',
-          productName: result.productName,
-          batchNo: result.batchNo,
-          quantity: result.quantity,
+          productName: record.productName,
+          batchNo: record.batchNo,
+          quantity: record.quantity,
           operator,
-          time: result.operateTime,
+          time: record.operateTime,
           status: 'success',
-          message: `入库成功：${result.productName} x${result.quantity}`,
+          message: `入库成功：${record.productName} x${record.quantity}`,
         };
         const scans = [scan, ...get().recentScans].slice(0, 10);
         set({ recentScans: scans });
         return true;
       } else {
+        const fail = result as ScanInboundFail;
         const scan: ScanResult = {
           id: Date.now().toString(),
           code: traceCode,
@@ -115,7 +125,9 @@ export const useWarehouseStore = create<WarehouseState>((set, get) => ({
           operator,
           time: new Date().toISOString(),
           status: 'error',
-          message: '追溯码不存在或已入库',
+          message: fail.message,
+          failReason: fail.reason,
+          codeStatus: fail.codeStatus,
         };
         const scans = [scan, ...get().recentScans].slice(0, 10);
         set({ recentScans: scans, error: scan.message });
@@ -134,23 +146,25 @@ export const useWarehouseStore = create<WarehouseState>((set, get) => ({
     set({ scanning: true, error: null });
     try {
       const result = await warehouseService.scanOutbound(traceCode, dealerId, orderId, operator);
-      if (result) {
+      if (result.success) {
+        const { record } = result;
         const scan: ScanResult = {
-          id: result.id,
+          id: record.id,
           code: traceCode,
           type: '出库',
-          productName: result.productName,
-          batchNo: result.batchNo,
-          quantity: result.quantity,
+          productName: record.productName,
+          batchNo: record.batchNo,
+          quantity: record.quantity,
           operator,
-          time: result.operateTime,
+          time: record.operateTime,
           status: 'success',
-          message: `出库成功：${result.productName} x${result.quantity}`,
+          message: `出库成功：${record.productName} x${record.quantity}`,
         };
         const scans = [scan, ...get().recentScans].slice(0, 10);
         set({ recentScans: scans });
         return true;
       } else {
+        const fail = result as ScanOutboundFail;
         const scan: ScanResult = {
           id: Date.now().toString(),
           code: traceCode,
@@ -161,7 +175,10 @@ export const useWarehouseStore = create<WarehouseState>((set, get) => ({
           operator,
           time: new Date().toISOString(),
           status: 'error',
-          message: '追溯码不存在或状态不允许出库',
+          message: fail.message,
+          failReason: fail.reason,
+          codeStatus: fail.codeStatus,
+          frozenBatchNo: fail.batchNo,
         };
         const scans = [scan, ...get().recentScans].slice(0, 10);
         set({ recentScans: scans, error: scan.message });

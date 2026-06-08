@@ -41,7 +41,7 @@ const dContact = (d: any) => d.contactPerson || d.contact || '';
 
 export default function WarehouseOutPage() {
   const navigate = useNavigate();
-  const { recentScans, scanOutbound, scanning, clearRecentScans } = useWarehouseStore();
+  const { recentScans, scanOutbound, scanning, clearRecentScans, error } = useWarehouseStore();
   const { toastSuccess, toastError, toastWarning, setPageTitle } = useUIStore();
   const [dealerSearch, setDealerSearch] = useState('');
   const [selectedDealer, setSelectedDealer] = useState<any>(null);
@@ -86,8 +86,8 @@ export default function WarehouseOutPage() {
     const traceCodes = db.getRawTraceCodes() as any[];
     const traceCode = traceCodes.find(tc => tc.code === code);
     const batch = batches.find(b => b.batchNo === code || b.batchId === code || b.code === code) || batches.find(b => traceCode?.batchId === b.id);
-    if (batch && (batch as any).frozen) {
-      setShowFrozenAlert({ batchNo: batch.batchNo, reason: (batch as any).freezeReason || '质量异常' });
+    if (batch && batch.isFrozen) {
+      setShowFrozenAlert({ batchNo: batch.batchNo, reason: batch.freezeReason || '质量异常' });
       toastError('出库失败', `批次 ${batch.batchNo} 已冻结，禁止出库`);
       return;
     }
@@ -115,7 +115,11 @@ export default function WarehouseOutPage() {
       toastSuccess('出库成功', `${traceCode?.level || '产品'}已登记出库至${selectedDealer.name}`);
       setCodeInput('');
     } else {
-      toastError('出库失败', '追溯码不存在、未入库、批次冻结或已出库');
+      const lastFail = recentScans[0];
+      if (lastFail?.failReason === 'batch_frozen' && lastFail.frozenBatchNo) {
+        setShowFrozenAlert({ batchNo: lastFail.frozenBatchNo, reason: '质量异常或召回流程' });
+      }
+      toastError('出库失败', error || '追溯码不存在、未入库、批次冻结或已出库');
     }
     inputRef.current?.focus();
   };

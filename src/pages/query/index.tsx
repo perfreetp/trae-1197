@@ -11,6 +11,7 @@ import {
   SAMPLE_TRACE_CODES,
   PublicVerifyResult,
 } from '@/services/reportService';
+import { useUIStore } from '@/stores/uiStore';
 import { cn } from '@/lib/utils';
 
 type VerifyTab = 'qc' | 'medication' | 'records';
@@ -20,12 +21,17 @@ export default function PublicQuery() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PublicVerifyResult | null>(null);
   const [activeTab, setActiveTab] = useState<VerifyTab>('qc');
+  const { toastError } = useUIStore();
 
-  const handleQuery = async () => {
-    if (!traceCode.trim()) return;
+  const handleQuery = async (forcedOrEvent?: string | React.MouseEvent) => {
+    const codeToQuery = (typeof forcedOrEvent === 'string' ? forcedOrEvent : traceCode).trim();
+    if (!codeToQuery) {
+      toastError('请输入或扫描追溯码');
+      return;
+    }
     setLoading(true);
     try {
-      const res = await publicQueryService.queryByTraceCode(traceCode);
+      const res = await publicQueryService.queryByTraceCode(codeToQuery);
       setResult(res);
       setActiveTab('qc');
     } finally {
@@ -34,8 +40,13 @@ export default function PublicQuery() {
   };
 
   const handleScan = (code: string) => {
-    setTraceCode(code);
-    setTimeout(() => handleQuery(), 300);
+    const trimmed = code?.trim();
+    setTraceCode(trimmed || '');
+    if (!trimmed) {
+      toastError('未扫描到有效追溯码，请重试');
+      return;
+    }
+    handleQuery(trimmed);
   };
 
   const handleReset = () => {
